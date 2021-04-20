@@ -16,6 +16,7 @@ import math
 from scipy.linalg import null_space
 import numpy as np
 import random
+import operator
 
 
 # In[2]:
@@ -81,7 +82,7 @@ def combine_sensitivities_by_list(materials_list, sensitivities):
                 try:
                     sum_ += float(sensitivities[material_loc][isotope]['sensitivity'])
                 except:
-                    print("WARNING: Missing sensitivities for: " + isotope +                           " If this is not in the first step there's a problem. Otherwise, the default sdf may not have all of the isotopes required. ")
+                    string=("WARNING: Missing sensitivities for: " + isotope +                           " If this is not in the first step there's a problem. Otherwise, the default sdf may not have all of the isotopes required. ")
             sensitivity_sum_list.append(sum_)
 
         material_sens_lists.append(sensitivity_sum_list)
@@ -210,17 +211,9 @@ def evaluate_with_Tsunami(material_betas,
     else:
         print("Faking sensitivities")
         material_sensitivites = [1.0, 1.0]
-        
+       
     return keff, beta_sensitivities, material_sensitivites[0], material_sensitivites[1]
 
-def pull_sensitivities():
-    default_material_list = sfh.build_material_dictionaries(materials, multiplier = 1.0)
-    material_sensitivites = combine_sensitivities_by_list(default_material_list,
-                                                          sfh.parse_sdf_file_into_dict(tsunami_job_flag + ".sdf"))
-
-    return calculate_sensitivities_2_materials_general(material_betas,
-                                            material_sensitivites[0],
-                                            material_sensitivites[1])
 # In[5]:
 
 
@@ -237,6 +230,17 @@ def build_initial_betas(x_dim, y_dim, build_type, rand_min = 0.0, rand_max = 1.0
                 material_betas.append(fixed_value)
     return material_betas
 
+def debug_write_out_11x11_list(list_, string_):
+    print("Writing out: ", string_, len(list_))
+    write_string = ""
+    count = 0
+    for value in list_:
+        write_string += str(value) + ","
+        if count == 10:
+            print("")
+            count = 0
+        count += 1
+    print(string_, len(list_), write_string)
 
 # In[6]:
 
@@ -259,96 +263,6 @@ def calculate_new_variables(variables, negative_sensitivities, step_size):
         new_new_variables.append(variable)
         
     return new_new_variables
-
-### Implementation of vanilla gradient descent
-def gradient_descent_scale(initial_betas,
-                           stopping_value = 0.001,
-                           number_of_steps = 10,
-                           step_size_type = 'fixed#0.1', 
-                           debug_fake_tsunami_run = False,
-                           debug_print_betas = False,
-                          write_output = False,
-                          write_output_string = "output.csv",
-                          null_space_adj = False,
-                          materials = ["void", "fuel"]):
-    steps = 1
-    stopping_criteria = False
-    variables = initial_betas
-    
-    if write_output:
-        with open(write_output_string, 'w') as output_file:
-            output_file.write("step, keff, step_size, old_betas, new_betas, negative_sense, beta_sensitivities\n")
-    
-    if null_space_adj:
-        ss = null_space(np.ones((1,121)))
-        proj = np.matmul(ss, np.transpose(ss))
-
-    while steps < number_of_steps+1 and stopping_criteria == False:
-        print("Step #:", steps)
-        ### 
-        tsunami_job_flag = 'tsunami_job_' + str(steps)
-        
-        if 'fixed' in step_size_type:
-            step_size_ = step_size_type.split("#")
-            step_size = float(step_size_[1])
-        if 'sqrt_n' in step_size_type:
-            step_size = 1/math.sqrt(steps)
-            if 'mult' in step_size_type:
-                mult_ = step_size_type.split("#")
-                step_size *= float(mult_[1])
-        
-        ### Evaluate with TSUNAMI
-        keff, beta_sensitivities, material_1_sense, material_2_sense = evaluate_with_Tsunami(variables,
-                                                             tsunami_job_flag = tsunami_job_flag,                    
-                                                             debug_fake_tsunami_run = debug_fake_tsunami_run,
-                                                             materials = materials)
-        print(beta_sensitivities[0])
-        if null_space_adj:
-            #print("pre beta sensitivities\n",np.array(beta_sensitivities))
-            beta_sensitivities = np.matmul(np.array(beta_sensitivities), proj)
-            #print("beta sensitivities\n",np.array(beta_sensitivities))
-            #print("proj\n",proj)
-        
-        ### Mulitplying derivatives by keff
-        negative_sensitivities = [float(deriv  * float(keff)) for deriv in beta_sensitivities]
-        if debug_print_betas:
-            print(negative_sensitivities)
-        print("Calculating step, step size:", step_size)
-        #new_variables = [float(variable_ - step_size * deriv_) for variable_, deriv_ in zip(variables, negative_sensitivities)]
-        new_variables = calculate_new_variables(variables, negative_sensitivities, step_size)
-        if debug_print_betas:
-            print(new_variables)
-        #new_variable = variables - step_size * function_derivative(variables)
-        #stopping_criteria = stopping_criteria_function(variables, new_variables, stopping_value)
-        
-        
-        
-        if write_output:
-            with open(write_output_string, 'a') as output_file:
-                write_string = str(steps) + "," + str(keff) + "," + str(step_size)
-                
-                for _ in variables:
-                    write_string += "," + str(_)
-                
-                for _ in new_variables:
-                    write_string += "," + str(_)
-                
-                for _ in negative_sensitivities:
-                    write_string += "," + str(_)
-                    
-                for _ in beta_sensitivities:
-                    write_string += "," + str(_)
-                    
-                for _ in material_1_sense:
-                    write_string += "," + str(_)
-                    
-                for _ in material_2_sense:
-                    write_string += "," + str(_)
-                
-                output_file.write(write_string + "\n")
-        steps += 1        
-        variables = new_variables
-
 
 # In[7]:
 
@@ -379,36 +293,116 @@ def check_beta_values(betas, min_val = 0.01, max_val = 0.99):
         if val < min_val:
             val = min_val
         new_betas.append(val)
-    return new_betas 
-
-def fix_mass(betas, target_mass, min_val = 0.01, max_val = 0.99, sticky_mass = True):
-    current_mass = sum(betas)
-    adjustment_factor = target_mass / current_mass 
-    new_betas = []
-    for _ in betas:
-        if sticky_mass:
-            if (_ == min_val):
-                new_betas.append(_)
-                continue
-            elif (_ == max_val):
-                new_betas.append(_)
-                continue
-        
-        new_betas.append(_*adjustment_factor)
     return new_betas
 
+def adjust_max_betas(betas,sensitivities,mass_adjust,typ='all'):
+    #print(sum(betas))
+    
+    if typ=='all':
+        beta_pair=np.zeros([len(betas),3])
+        for i in range(len(betas)):
+            beta_pair[i,0]=betas[i]
+            beta_pair[i,1]=sensitivities[i]
+            beta_pair[i,2]=i+1
+            
+        #print(beta_pair)
+        beta_pair=sorted(beta_pair,key=operator.itemgetter(1))
+        #print(beta_pair)
+        adjust_slope=(mass_adjust/121)
+        
+        for i in range(len(betas)):
+            #print(beta_pair[i][0])
+            beta_pair[i][0]=beta_pair[i][0]-adjust_slope+adjust_slope*((i)/121)
+            #print(beta_pair[i][0])
+        #print(beta_pair)
+        beta_pair=sorted(beta_pair,key=operator.itemgetter(2))
+        beta_pairs=np.zeros([len(betas),3])
+        for i in range(len(betas)):
+            beta_pairs[i,0]=beta_pair[i][0]
+            beta_pairs[i,1]=beta_pair[i][1]
+            beta_pairs[i,2]=beta_pair[i][2]
+        #print(sum(beta_pairs[:,0]))
+        #print(beta_pairs[:,0])
+        new_betas=beta_pairs[:,0]
+        
+    
+    elif typ=='bottom':
+        beta_pair=np.zeros([len(betas),3])
+        for i in range(len(betas)):
+            beta_pair[i,0]=betas[i]
+            beta_pair[i,1]=sensitivities[i]
+            beta_pair[i,2]=i+1
+            
+        #print(beta_pair)
+        beta_pair=sorted(beta_pair,key=operator.itemgetter(1))
+        #print(beta_pair)
+        adjust_slope=(mass_adjust/(121-15))
+        
+        for i in range(len(betas)):
+            #print(beta_pair[i][0])
+            if i<(121-15):
+                beta_pair[i][0]=beta_pair[i][0]-adjust_slope+adjust_slope*((i)/(121-15))
+            else:
+                beta_pair[i][0]=beta_pair[i][0]
+            #print(beta_pair[i][0])
+        #print(beta_pair)
+        beta_pair=sorted(beta_pair,key=operator.itemgetter(2))
+        beta_pairs=np.zeros([len(betas),3])
+        for i in range(len(betas)):
+            beta_pairs[i,0]=beta_pair[i][0]
+            beta_pairs[i,1]=beta_pair[i][1]
+            beta_pairs[i,2]=beta_pair[i][2]
+        #print(sum(beta_pairs[:,0]))
+        #print(beta_pairs[:,0])
+        new_betas=beta_pairs[:,0]
+        
+    
+    return new_betas 
+
+def fix_mass(betas, target_mass, sensitivities, min_val = 0.01, max_val = 0.99, sticky_mass = True, typ = 'all'):
+    current_mass = sum(betas)    
+    adjustment_factor = target_mass / current_mass 
+    
+    new_betas = []
+    if adjustment_factor>1:
+        for _ in betas:
+            if sticky_mass:
+                if (_ == min_val):
+                    new_betas.append(_)
+                    continue
+                elif (_ == max_val):
+                    new_betas.append(_)
+                    continue
+    else:
+        mass_adjust=current_mass-target_mass
+        new_betas=adjust_max_betas(betas,sensitivities,mass_adjust,typ)
+        
+        
+    return new_betas
+
+    
+
 ### Function which takes betas, target_mass, whether to use "sticky values" (make highest and lowest values unchanged)
-def fixed_mass_adjustment(betas, target_mass, sticky_mass = True, debug=False, mass_round_dig = 5):
+def fixed_mass_adjustment(betas, target_mass, sensitivities, typ, sticky_mass = True, debug=False, mass_round_dig = 5):
     if debug:
         print("Curent mass: {}, target: {}".format(sum(betas), target_mass))
+    
     material_betas = check_beta_values(betas)
-    while round(sum(material_betas), 5) != 60.5:
-        material_betas = fix_mass(betas = material_betas, target_mass = 60.5, sticky_mass = sticky_mass)
+    while round(sum(material_betas), 5) != 61.0:
+        material_betas = fix_mass(betas = material_betas,sensitivities=sensitivities, target_mass = 61.0, sticky_mass = sticky_mass,typ=typ)
         material_betas = check_beta_values(material_betas)
+        #print(sum(material_betas))
         if debug:
             print(sum(material_betas))
-    return material_betas   
-
+    return material_betas 
+  
+def calculate_first_moment_vector(beta_1, first_moment_vector, beta_sensitivities):
+    return [(beta_1 * first_mv  + (1 - beta_1) * deriv) 
+                               for first_mv, deriv in zip(first_moment_vector, beta_sensitivities)]
+    
+def calculate_second_moment_vector(beta_2, second_moment_vector, beta_sensitivities):
+    return [(beta_2 * second_mv + (1 - beta_2) * deriv**2) 
+                                for second_mv, deriv in zip(second_moment_vector, beta_sensitivities)]
 ### Implementation of ADAM gradient descent
 ### inputs:
 ### material betas - list of values from 0-1.0 describing material
@@ -437,6 +431,7 @@ def adam_gradient_descent_scale(initial_betas,
                            fix_mass_adjustment = True,
                            fix_mass_target = 'initial',
                            fix_mass_round_value = 5,
+                           fix_mass_type='all',
                            initialize_first_and_second_vectors_from_sdf = False,
                            initialize_first_and_second_vector_target_sdf_file = "default",
                            initialize_first_and_second_vector_target_sdf_betas = [],
@@ -492,7 +487,7 @@ def adam_gradient_descent_scale(initial_betas,
                                                              submit_tsunami_job = submit_tsunami_job,
                                                              materials = materials)
 
-            
+         
         ### Mulitplying %keff derives by keff
         beta_sensitivities = [float(deriv * float(keff)) for deriv in beta_sensitivities]
         
@@ -505,10 +500,12 @@ def adam_gradient_descent_scale(initial_betas,
             
         new_variables = [(beta + (alpha_value * first_mv) / (math.sqrt(second_mv) + epsilon)) for
                          beta, first_mv, second_mv in zip(variables, first_moment_vector_hat, second_moment_vector_hat)]
-
+        
         if fix_mass_adjustment:    
             new_variables = fixed_mass_adjustment(new_variables,
-                                                  target_mass,
+                                                  target_mass, 
+                                                  beta_sensitivities,
+                                                  fix_mass_type,
                                                   debug=debug_print_all,
                                                   mass_round_dig = fix_mass_round_value)
         new_variables = np.array(new_variables)
@@ -521,7 +518,6 @@ def adam_gradient_descent_scale(initial_betas,
             debug_write_out_11x11_list(second_moment_vector_hat, "second_moment_vector_hat")
             debug_write_out_11x11_list(variables, "variables")
             debug_write_out_11x11_list(new_variables, "new_variables_final")
-        
         ### Writing out the output file
         if write_output:
             with open(write_output_string, 'a') as output_file:
@@ -558,13 +554,12 @@ material_betas = build_initial_betas(11, 11, 'fixed', fixed_value = number_used/
 
 ### running adam gradient descent algo
 adam_gradient_descent_scale(material_betas,
-                       submit_tsunami_job=True,
+                       submit_tsunami_job=False,
                        debug_print_all = False,
-                       alpha_value = 40.0,
+                       alpha_value = 200.0,
                        number_of_steps = 10,
                        write_output = True,
                        fix_mass_adjustment = True,
                        fix_mass_target = 'initial',
                        fix_mass_round_value = 5,
                        materials = ["fuel/moderator:1/3.4", "void" ])
-
